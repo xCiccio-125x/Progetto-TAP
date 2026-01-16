@@ -1,0 +1,140 @@
+services:
+  producer:
+      build: ./producer
+      container_name: nba-producer
+      environment:
+      - GAME_ID=${PARTITA:-0}
+      volumes:
+      - ./producer/logs:/app/logs
+      networks:
+        - nba-net
+      depends_on:
+        fluent-bit:
+          condition: service_started
+        topics:
+          condition: service_completed_successfully
+
+  fluent-bit:
+    image: fluent/fluent-bit:latest
+    container_name: nba-fluent-bit
+    volumes:
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./producer/logs:/data
+    command: ["-c", "/fluent-bit/etc/fluent-bit.conf"] 
+    ports:
+      - "9880:9880"
+    networks:
+      - nba-net
+    depends_on:
+      topics:
+        condition: service_completed_successfully
+  
+  nba-kafka:     
+    image: apache/kafka:4.1.0                                  
+    hostname: nba-kafka                                            
+    container_name: nba-kafka                                      
+    environment:
+      KAFKA_NODE_ID: 1                                        
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'  
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT_HOST://nba-kafka:9092,PLAINTEXT://nba-kafka:29092'                       
+      KAFKA_PROCESS_ROLES: 'broker,controller'                                        
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@nba-kafka:29093'                                  
+      KAFKA_LISTENERS: 'CONTROLLER://:29093,PLAINTEXT_HOST://:9092,PLAINTEXT://:29092'  
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'                                    
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'           
+      CLUSTER_ID: '4L6g3nShT-eMCtK--X86sw'                  
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1                
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0                 
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1                   
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'  
+    ports:
+      - '9092:9092'
+    networks:
+      - nba-net      
+  topics:
+    image: apache/kafka:4.1.0                                  
+    command: >                                            
+      bash -c "
+      /opt/kafka/bin/kafka-topics.sh --create --topic nba_events --bootstrap-server nba-kafka:9092    
+      && /opt/kafka/bin/kafka-topics.sh --create --topic nba_aggregation --bootstrap-server nba-kafka:9092" 
+    networks:
+      - nba-net
+    depends_on:       
+      nba-kafka:
+        condition: service_started
+  
+  nba-spark-aggregation:
+    image: apache/spark:3.5.0
+    hostname: nba-spark-aggregation
+    container_name: nba-spark-aggregation
+    user: root
+    volumes:
+      - ./spark/:/opt/spark/etc/
+      - spark-ivy-cache:/root/.ivy2
+    command: > 
+      /opt/spark/bin/spark-submit 
+      --conf spark.driver.extraJavaOptions="-Divy.cache.dir=/tmp -Divy.home=/tmp" 
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 
+      /opt/spark/etc/nba_aggregation.py
+    networks:
+      - nba-net
+    depends_on:
+      topics:
+        condition: service_completed_successfully
+      nba-elastic-search:
+        condition: service_started
+    
+  nba-spark-ml:
+    image: apache/spark:3.5.0
+    hostname: nba-spark-ml
+    container_name: nba-spark-ml
+    user: root
+    volumes:
+      - ./spark/:/opt/spark/etc/
+      - ./spark/pipeline_data:/app/pipeline_data
+      - spark-ivy-cache:/root/.ivy2
+    command: >
+      /bin/bash -c "pip install numpy pandas &&
+      /opt/spark/bin/spark-submit
+      --conf spark.driver.extraJavaOptions='-Divy.cache.dir=/tmp -Divy.home=/tmp'
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.elasticsearch:elasticsearch-spark-30_2.12:8.11.1
+      /opt/spark/etc/nba_ml.py"
+    networks:
+      - nba-net
+  
+  nba-elastic-search:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: nba-elastic-search
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - ./Elastic-Search/es_data:/usr/share/elasticsearch/data 
+    ports:
+      - "9200:9200"
+    networks:
+      - nba-net
+    
+  nba-kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.1
+    container_name: nba-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://nba-elastic-search:9200
+    volumes:
+      - ./Elastic-Search/kbn_data:/usr/share/kibana/data
+    networks:
+      - nba-net
+    depends_on:
+      nba-elastic-search:
+        condition: service_started
+
+networks:
+  nba-net:
+    driver: bridge
+
+volumes:
+  spark-ivy-cache:

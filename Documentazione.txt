@@ -1,0 +1,27 @@
+Tutto è gestito nel docker-compose.
+
+- Per avviare tutto: PARTITA=0000000 docker-compose up
+- Per spegnere tutto: docker-compose down
+- Per buildare tutto: docker-compose build
+
+- Per visualizzare i dati: http://localhost:5601
+
+- Per avviare il consumer kafka:
+    docker exec nba-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server nba-kafka:29092   --topic nba_events   --property print.key=true \
+    --property key.separator=" : " --from-beginning
+
+- Per addestrare il modello:
+    1) Avvio il registratore (nba-etl.py) delle varie partite processate da spark SQL:
+        Cambio nel docker-compose il codice python che viene eseguito (da nba_ml.py a nba-etl.py)
+    2) Una volta che le partite sono state processate, le salviamo in locale:
+            docker cp nba-spark-analytics:/tmp/training_dataset ./training_dataset_estratto
+    3) Avvio il training:
+            docker run -u 0 --name nba-trainer \
+            -v "./spark/:/opt/spark/etc/" \
+            -v "./spark/pipeline_data:/app/pipeline_data" apache/spark:3.5.0 \
+            bash -c "pip install numpy && /opt/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:3.5.0 \
+            /opt/spark/etc/train_model.py"
+    4) Una volta che il training finisce salviamo in locale:
+        docker cp nba-trainer:/tmp/models ./spark/pipeline_data/
+        docker rm nba-trainer
