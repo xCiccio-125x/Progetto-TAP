@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.VectorAssembler","timestamp":1766596466144,"sparkVersion":"4.0.1","uid":"VectorAssembler_9897cc2434a8","paramMap":{"inputCols":["Score_Diff","Seconds_Remaining"],"outputCol":"features_win"},"defaultParamMap":{"outputCol":"VectorAssembler_9897cc2434a8__output","handleInvalid":"error"}}
